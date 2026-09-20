@@ -6,7 +6,7 @@ All tables reproduced verbatim from the source records, complete, with a one-lin
 
 Condition: retrieval quality score on our own query set; metric definition, query count and run count were not recorded. Eval set is our private 11-category eval bank (questions not published). Arrows denote query language → document language.
 
-| Model | Dim | Index | 中文 (Chinese) | 英文 (English) | EN→CN | CN→EN |
+| Model | Dim | Index | Chinese | English | EN→CN | CN→EN |
 |---|---|---|---|---|---|---|
 | qwen3-0.6b | 1024 | ✅ HNSW | 0.265 | 0.526 | 0.419 | 0.496 |
 | qwen3-8b | 4096 | ❌ exact scan | 0.362 | 0.590 | 0.488 | 0.463 |

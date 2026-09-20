@@ -2,7 +2,7 @@
 """Draw the repo banner. Pure PIL, no generated imagery — RyanAI Lab house style.
 
 Concept: bilingual (CN/EN) retrieval over our personal knowledge base on pgvector.
-Two stacked slabs represent the two language directions (01 中文, 02 ENGLISH), a
+Two stacked slabs represent the two language directions (01 CHINESE, 02 ENGLISH), a
 wider third slab is the disqualified 4096-dim candidate that falls back to exact
 scan (03 EXACT SCAN, struck through), and a single orange arrow marks the chosen
 1024-dim HNSW path. Left = wordmark.
