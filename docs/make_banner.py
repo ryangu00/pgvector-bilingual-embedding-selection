@@ -55,7 +55,7 @@ for ox, oy in ((72, 78), (1150, 536)):
 d.text((80, 196), "BILINGUAL", font=f_title, fill=WHITE)
 d.text((80, 288), "EMBEDDINGS", font=f_title, fill=WHITE)
 d.text((82, 414), "Choosing a CN/EN embedding model for our personal knowledge base.", font=f_tag, fill=WHITE)
-d.text((82, 462), "OLLAMA · PGVECTOR 0.8.2 · QWEN3-0.6B · HNSW · PGROONGA · MEASURED", font=f_mono, fill=GREY)
+d.text((82, 462), "OLLAMA · PGVECTOR 0.8.2 · QWEN3-0.6B · HNSW · MEASURED", font=f_mono, fill=GREY)
 
 # right: three slabs stacked — two language directions plus the disqualified exact-scan candidate
 SX, SY = 860, 150

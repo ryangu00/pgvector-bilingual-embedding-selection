@@ -40,7 +40,7 @@ Each pitfall is given as **symptom → root cause → fix**, expanded with **how
 ## 6. Retrieval silently degrades after a tool upgrade
 
 - **Symptom.** After a tool upgrade, retrieval quality silently degrades and raw CLI captures break.
-- **Root cause.** A 2026-06-08 tool upgrade (version 0.41.18.0) silently reset the embedding-model config entry back to `nomic-embed-text` while the dimensions config entry kept the qwen3 value — the self-contradictory pair broke every raw capture.
+- **Root cause.** A 2026-06-08 tool upgrade silently reset the embedding-model config entry back to `nomic-embed-text` while the dimensions config entry kept the qwen3 value — the self-contradictory pair broke every raw capture.
 - **Fix.** After every upgrade, re-check both embedding config entries (model and dimensions); if they disagree, restore the correct model and dimensions, restart whatever long-running process caches the embedding configuration, check for mixed-model vectors from the inconsistent window, re-embed any content captured under the wrong model, and re-run any capture that previously failed. Add a guard script that asserts the pair is consistent.
 - **How we found it.** Captures started failing after the upgrade; comparing the two config keys showed one had been reset and the other had not.
 
@@ -48,8 +48,8 @@ Each pitfall is given as **symptom → root cause → fix**, expanded with **how
 
 - **Symptom.** Full-text keyword search returns empty results for Chinese text.
 - **Root cause.** Plain Postgres FTS did not return results for the Chinese queries we ran; its default text-search configuration does not segment CJK text into usable terms.
-- **Fix.** Install pgroonga (4.0.6), enable the extension, build a pgroonga index, and rewrite queries to its OR operator (`&@|`) — installing pgroonga alone does not rewrite existing FTS queries. Split multi-word queries on spaces combined with `&@|`.
-- **How we found it.** Chinese queries returned empty under plain Postgres FTS; pgroonga with space-split `&@|` queries returned results.
+- **Fix.** The default (English) text-search configuration does not segment Chinese; it treats a whole sentence as one token. We tried pgroonga 4.0.6 with space-split `&@|` queries, and it returned relevant pages on four manual queries (2026-05-30). We dropped its index on 2026-06-06 after intermittent insert failures on large Chinese documents; the rollback record lists Postgres 17.10, pgroonga 4.0.6 and groonga 16.0.5, with no crash-safe WAL configured. If you try it, wire the `&@` query operator into your search layer, enable pgroonga's crash-safe module (`pgroonga_crash_safer` in `shared_preload_libraries`), and measure retrieval quality first; these three conditions come from our post-mortem and are untested.
+- **How we found it.** Chinese queries returned empty under plain Postgres FTS; pgroonga with space-split `&@|` queries returned results. Result was four manual queries on 2026-05-30; the index was dropped on 2026-06-06 (insert failures); no recall measurement exists for it.
 
 ## 8. Embed failure logs show rotating ephemeral ports
 

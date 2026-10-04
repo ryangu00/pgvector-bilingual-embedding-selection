@@ -8,6 +8,32 @@
 
 A retrieval model that "looks healthy" on short queries can be blind on the exact inputs that matter — long chunks and Chinese text. Two failures here were silent: `nomic` returned a confidently-wrong Chinese match separated from the right one by only 0.033 (indistinguishable from noise), and the ollama `0.30.x` runner returned HTTP 400/EOF on large inputs while short inputs looked fine. Both would have passed a shallow smoke test. The lesson is to assert retrieval quality on real bilingual long-chunk content, not on a held-out toy query, and to treat any asymmetric "short works / long fails" symptom as a batch-limit regression before reaching for config or network explanations.
 
+## Update (2026-10): what happened to the Chinese keyword leg, and a metric pitfall
+
+This section qualifies the pgroonga step in the procedure below and flags a metric bug that inflates recall.
+
+**pgroonga trial.** On 2026-05-30 we installed pgroonga 4.0.6 on Postgres 17, built a pgroonga index on the chunk text, and routed Chinese queries to its OR operator (`&@|`) with the query split on spaces. Four manual Chinese test queries each retrieved a relevant page. No recall, MRR or latency figure was recorded.
+
+**Insert failures and rollback.** On 2026-06-06 writes of Chinese-heavy documents intermittently failed with `pgroonga: [insert] failed to set column value: [ii][buffer][put] loop is found`. Versions: Postgres 17.10, pgroonga 4.0.6, groonga 16.0.5 (the newest available from the package manager at that time, so upgrading was ruled out). Reindexing, restarts and parameter changes were treated as symptom relief. The post-mortem found the index had zero scans (`idx_scan = 0`) and the active search code contained no pgroonga query operator. The fix was `DROP INDEX`. After the drop, capture of Chinese documents larger than 20 KB succeeded without manual reindex; twelve of twelve captures passed. The cause is inferred from the error prefix and from the failures stopping after the drop; there was no before/after control run.
+
+**Known-good state.** With the English text-search configuration, `to_tsvector('english', <Chinese sentence>)` yields the whole sentence as a single token, so keyword retrieval on Chinese is close to dead. On 2026-07-02 both zhparser and pgroonga were confirmed still installable on the same Postgres 17 instance. A guard script that kept re-applying a Chinese configuration was removed on 2026-07-03; the English configuration stayed.
+
+### Table 5 — native evaluation of the keyword leg
+
+Condition: 2026-07-03, measured once. Same database as the README's Postgres + pgvector knowledge base after it had grown. 120 synthetic queries over real pages, one gold page per query, 100 of the 120 queries contain Chinese characters, k = 10, quiet job queue, single run, English text-search configuration in effect. Compared with the original README setup, the software version differed and the stack used a fine-tuned variant of the embedding model plus a trained reranker. The README's own Table 1 uses a different metric and is not affected.
+
+| Configuration | P@10 | R@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| hybrid (RRF k=60) | 0.09 | 0.93 (inflated, see below) | 0.74 | 0.80 |
+| vector only | 0.12 | 1.21 (above 1, see below) | 0.76 | 0.96 |
+| keyword only | 0.00 | 0.03 | 0.03 | 0.03 |
+
+RRF constant 30, 45, 60 and 90 gave identical hybrid scores. The vector-only nDCG advantage is a property of this eval set (single-page semantic queries); we did not drop the keyword leg because production also receives exact-match queries (symbols, names, IDs). This measurement says nothing about pgroonga — pgroonga was not in the query path at that time.
+
+**Metric pitfall: recall above 1.** Mean R@10 on the 120 queries went from 0.93 to 0.87 after a merge. A per-query comparison run on both code trees against the same database back to back at the same time showed the set of queries with a hit was identical: 102 of 120 (0.85), with no query changing from hit to miss or miss to hit. The 0.93 was inflated: the old code did not deduplicate results by page, so two chunks of the same gold page occupied two top-10 slots while only one page was relevant, giving recall = 2/1 = 2.00 on some queries. The number of queries with R@10 = 2.00 fell from ten before the merge to two after; the 8 that normalised account for about 8/120 = 0.067, the whole apparent drop. The true baseline on this set is 0.85 hit rate at k = 10. Lessons: (a) the moment recall exceeds 1, audit deduplication by page first; (b) acceptance comparisons must run both versions on the same database back to back at the same time, not today's code against last week's scoreboard; (c) a mechanism hypothesis needs per-query evidence.
+
+**Unresolved.** Early manual-test results and later operating records are inconsistent. The records do not establish whether the pgroonga query route actually served Chinese queries between 2026-05-30 and 2026-06-06, or when it may have stopped doing so. No retrieval-quality measurement (recall, MRR, nDCG) exists for pgroonga on this database. The insert-failure cause is inferred, not isolated; whether the crash-safe module or the MeCab tokenizer would prevent it is untested. The Chinese tokenizer A/B (zhparser vs English) came from a harness we later disowned; a clean re-run on the native evaluation path was not done. The exact formula of Table 1's scores is not recorded.
+
 ## Hardware and stack
 
 | | |
@@ -17,15 +43,15 @@ A retrieval model that "looks healthy" on short queries can be blind on the exac
 | Chosen model | `qwen3-embedding:0.6b` served by ollama |
 | Model flag | Modelfile `PARAMETER num_batch 16384` (ollama default is much lower — see crash log below) |
 | ollama versions | Mac: 0.30.10 (affected by the regression); Dell Pro Max with GB10 nodes: 0.24.0 and 0.23.4 (tested, not affected) |
-| Chinese keyword search | pgroonga 4.0.6 |
+| Chinese keyword search | pgroonga 4.0.6 was tried on 2026-05-30 and its index was dropped on 2026-06-06; not part of our later known-good configuration (see Update 2026-10) |
 
-The candidates benchmarked are public upstream models: `qwen3-embedding:0.6b`, `qwen3-8b`, `bge-m3`, and `nomic-embed-text` (served via ollama). Our retrieval-quality numbers come from our private 11-category eval bank (questions not published); retrieval quality score on our own query set; metric definition, query count and run count were not recorded, so the scores are reproduced as recorded rather than re-derived.
+The candidates benchmarked are public upstream models: `qwen3-embedding:0.6b`, `qwen3-8b`, `bge-m3`, and `nomic-embed-text` (served via ollama). Our retrieval-quality numbers come from our private 11-category eval bank (questions not published); retrieval quality score on our own query set; metric definition, query count and run count were not recorded, so the scores are reproduced as recorded rather than re-derived. The note we kept describes the table as a separation margin ('larger gap = stronger discrimination'), not as recall; the exact formula is still not recorded.
 
 ## Procedure as run
 
 The source records the procedure as a sequence of decisions and verifications, not a single runnable script. The migration and evaluation scripts are not published; where a launch command is not recorded, this cookbook says so rather than inventing one.
 
-1. **Score candidates on bilingual retrieval.** Score the four candidates on Chinese, English, and cross-lingual EN→CN and CN→EN retrieval of the knowledge base (Table 1). The eval set is our private 11-category eval bank (questions not published); the metric definition, query count, and run count are not recorded in the source.
+1. **Score candidates on bilingual retrieval.** Score the four candidates on Chinese, English, and cross-lingual EN->CN and CN->EN retrieval of the knowledge base (Table 1). The eval set is our private 11-category eval bank (questions not published); the metric definition, query count, and run count are not recorded in the source. The note we kept describes the table as a separation margin ('larger gap = stronger discrimination'), not as recall; the exact formula is still not recorded.
 2. **Screen against pgvector constraints.** Any candidate wider than the HNSW index limit (2,000 dims) gets no ANN index and falls back to exact scan. This disqualified `qwen3-8b` (4,096 dims) despite its higher scores.
 3. **Choose `qwen3-embedding:0.6b` and migrate the vector column.** Migrate from the nomic schema by NULL-ing the embedding column first, then `ALTER` the column type — a direct `ALTER` on a populated pgvector column fails.
 4. **Re-embed existing content.** Re-embed stale content with the `embed --stale` command of the knowledge-base tool (cost in Table 2).
@@ -33,7 +59,7 @@ The source records the procedure as a sequence of decisions and verifications, n
 6. **Restart the caching process.** Restart whatever long-running process caches the embedding configuration after the embedding-model change — that process reads the model env only at startup.
 7. **Verify.** Run the `doctor` integrity check plus a raw pgvector retrieval probe (Table 2).
 8. **Apply the batch fix preventively (2026-06-23).** Apply `PARAMETER num_batch 16384` to the embedding model on all three nodes and run the large-input acceptance battery (Tables 3–4).
-9. **Install pgroonga for Chinese keyword search.** Plain Postgres FTS returns empty on Chinese; install pgroonga 4.0.6 and split multi-word queries on spaces combined with its OR operator (`&@|`).
+9. **Optional experiment, rolled back: pgroonga for Chinese keyword search.** Plain Postgres FTS with the English configuration returns nothing useful on Chinese. On 2026-05-30 we installed pgroonga 4.0.6, built an index on the chunk text and routed Chinese queries through its OR operator (`&@|`), splitting the query on spaces; four manual Chinese test queries each returned a relevant page. We never measured retrieval quality with it, and we dropped the index on 2026-06-06 after intermittent insert failures (see Update 2026-10). Do not treat this step as a verified recommendation.
 
 > The exact ollama serve command and Modelfile build commands are not recorded in the source; the only recorded flag is `PARAMETER num_batch 16384`. Do not assume a specific port or launch invocation.
 
@@ -43,7 +69,7 @@ All tables are reproduced verbatim from the source with the measurement conditio
 
 ### Table 1 — four-model comparison
 
-Condition: retrieval quality score on our own query set; metric definition, query count and run count were not recorded. Arrows denote query language → document language.
+Condition: retrieval quality score on our own query set; metric definition, query count and run count were not recorded. The note we kept describes the table as a separation margin ('larger gap = stronger discrimination'), not as recall; the exact formula is still not recorded. Arrows denote query language → document language.
 
 | Model | Dim | Index | Chinese | English | EN→CN | CN→EN |
 |---|---|---|---|---|---|---|
@@ -93,9 +119,9 @@ Condition: ollama runner log evidence.
 - **qwen3-8b.** Highest Chinese and English scores in Table 1, but its vector width exceeds the pgvector HNSW limit for this schema, so it runs as an exact scan (usable, but not indexed under this fixed dimension and index scheme).
 - **Large-chunk embedding (pre-fix).** Any input exceeding the ollama runner's single-batch capacity failed with HTTP 400/EOF while short inputs looked healthy — the asymmetric symptom made it look like a config or network problem.
 - **False test failures from the harness.** `tail -3` truncated the "captured:" header and the battery falsely reported 0/3.
-- **2026-06-08 regression.** A tool upgrade (version 0.41.18.0) silently reset the embedding-model config entry back to `nomic-embed-text` while the dimensions config entry kept the qwen3 value — the self-contradictory pair broke every raw CLI capture.
+- **2026-06-08 regression.** A tool upgrade silently reset the embedding-model config entry back to `nomic-embed-text` while the dimensions config entry kept the qwen3 value — the self-contradictory pair broke every raw CLI capture.
 - **Incomplete table migration.** The original migration moved only `content_chunks` and `pages`; the `facts` table was missed.
-- **Postgres FTS on Chinese.** Full-text keyword search returned empty results for Chinese text until pgroonga was installed.
+- **Postgres FTS on Chinese.** Full-text keyword search with the English configuration returned empty or useless results for Chinese text. pgroonga made four manual test queries return relevant pages (2026-05-30), but the index was dropped a week later after intermittent insert failures and we have no retrieval-quality measurement for it. A later native evaluation with the English configuration in place scored 0.03 recall@10 for the keyword leg alone (see Update 2026-10).
 
 ## Pitfalls
 
@@ -107,7 +133,7 @@ Symptom → root cause → fix, in the order they bear on this cookbook. Expande
 - Old embeddings keep being served after switching models → the process caching the embedding configuration reads the model env only at startup → restart whatever long-running process caches the embedding configuration whenever the embedding model changes.
 - `export <path>` writes to the wrong directory → the command ignores its path argument → content always lands in `./export`.
 - Retrieval silently degrades after a tool upgrade → the upgrade reset one embedding config key but not its paired dimension key → re-check both embedding config entries after every upgrade and add a guard script.
-- Chinese keyword search returns nothing → plain Postgres FTS returned empty on the Chinese queries we ran → install pgroonga and split multi-word queries on spaces, combined with its OR operator (`&@|`).
+- Chinese keyword search returns nothing → the default (English) text-search configuration does not segment Chinese; it treats a whole sentence as one token → we tried pgroonga with space-split `&@|` queries and it returned relevant pages on four manual queries, but we rolled it back after intermittent insert failures on large Chinese documents (pgroonga 4.0.6, groonga 16.0.5, no crash-safe WAL configured). If you try it, wire the query operator into your search layer, enable pgroonga's crash-safe module, and measure retrieval quality first; these three conditions come from our post-mortem and are untested.
 - Embed failure logs show rotating ephemeral ports → that is the ollama runner subprocess signature, not enough on its own to rule a network or config fault → check token-vs-batch counters in the runner log first.
 - Automated battery reports failures that pass manually → harness truncation bug (`tail -3` ate the header line) → stop truncating the output with `tail -3`, parse the full or structured output, and re-read the test slug to verify the write.
 - Rows missing in one feature after migration → migration enumerated tables by hand and missed `facts` → diff the full table list before and after, and reconcile per-table row counts and primary keys, not just table names.
